@@ -1,21 +1,24 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import sqlite3
 from datetime import datetime, timedelta
+
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Role parameters (replace with your role IDs)
-role_1_id = 1178069995582918686
-role_2_id = 1178070027560292506
-administrator_role_id = 1178075204820418610  # Replace with your administrator role ID
+# Role parameters 
+role_1_id = 1017154265426427966
+role_2_id = 962693218338754560
+role_nato_id = 953235730463850506
+role_russia_id = 953235676403486720
+administrator_role_id = 971102625040855070  #  administrator role ID
 
-# Connect to the main officers database
+# конект к бд офицеров
 conn_officers = sqlite3.connect('officers.db')
 cursor_officers = conn_officers.cursor()
 
-# Create the officers table if it doesn't exist
+# создание базы
 cursor_officers.execute('''
     CREATE TABLE IF NOT EXISTS officers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,11 +32,11 @@ cursor_officers.execute('''
 ''')
 conn_officers.commit()
 
-# Connect to the blacklist database
+# блеклист
 conn_blacklist = sqlite3.connect('blacklist.db')
 cursor_blacklist = conn_blacklist.cursor()
 
-# Create the blacklist table if it doesn't exist
+# создать блеклист
 cursor_blacklist.execute('''
     CREATE TABLE IF NOT EXISTS blacklist (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,26 +50,30 @@ cursor_blacklist.execute('''
 ''')
 conn_blacklist.commit()
 
+
+
 @bot.event
 async def on_ready():
     print(f'Bot is ready: {bot.user.name}')
 
 @bot.command()
 @commands.has_role(administrator_role_id)
-async def add_officer(ctx, officer: discord.Member, steamid, position, side):
+async def add(ctx, officer: discord.Member, steamid, position, side):
     date_added = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     added_by = f'{ctx.author.name}#{ctx.author.discriminator}'
 
-    # Add information to the officers database
+    # доп информация
     cursor_officers.execute('''
         INSERT INTO officers (nickname, steamid, position, side, date_added, added_by)
         VALUES (?, ?, ?, ?, ?, ?)
     ''', (officer.display_name, steamid, position, side, date_added, added_by))
     conn_officers.commit()
 
-    # Add roles to the user
+    # ролиr
     role_1 = ctx.guild.get_role(role_1_id)
     role_2 = ctx.guild.get_role(role_2_id)
+    role_nato = ctx.guild.get_role(role_nato_id)
+    role_russia = ctx.guild.get_role(role_russia_id)
 
     if role_1:
         await officer.add_roles(role_1)
@@ -74,7 +81,14 @@ async def add_officer(ctx, officer: discord.Member, steamid, position, side):
     if role_2:
         await officer.add_roles(role_2)
 
-    # Output information in the form of an embed
+    if side.lower() == 'nato':
+        if role_nato:
+            await officer.add_roles(role_nato, reason="NATO side assigned.")
+    elif side.lower() == 'russia':
+        if role_russia:
+            await officer.add_roles(role_russia, reason="Russia side assigned.")
+
+    # вывод
     embed = discord.Embed(
         title=f'Officer {officer.display_name} added!',
         color=discord.Color.green()
@@ -87,8 +101,8 @@ async def add_officer(ctx, officer: discord.Member, steamid, position, side):
 
 @bot.command()
 @commands.has_role(administrator_role_id)
-async def list_officers(ctx):
-    # Retrieve all officers from the officers database
+async def officers(ctx):
+    # вывести список офицеров
     cursor_officers.execute('SELECT * FROM officers')
     officers = cursor_officers.fetchall()
 
@@ -100,7 +114,7 @@ async def list_officers(ctx):
         )
         await ctx.send(embed=embed)
     else:
-        # Format and output information about officers
+        # форматирование
         embed = discord.Embed(
             title='List of Officers',
             color=discord.Color.blue()
@@ -115,19 +129,21 @@ async def list_officers(ctx):
 
 @bot.command()
 @commands.has_role(administrator_role_id)
-async def remove_officer(ctx, officer: discord.Member):
-    # Check if an officer with the specified ID exists
+async def remove(ctx, officer: discord.Member):
+
     cursor_officers.execute('SELECT * FROM officers WHERE nickname = ?', (officer.display_name,))
     officer_info = cursor_officers.fetchone()
 
     if officer_info:
-        # Remove the officer from the database
+        # удалить офицера
         cursor_officers.execute('DELETE FROM officers WHERE nickname = ?', (officer.display_name,))
         conn_officers.commit()
 
-        # Remove roles from the user
+        # снять роли с офицера
         role_1 = ctx.guild.get_role(role_1_id)
         role_2 = ctx.guild.get_role(role_2_id)
+        role_nato = ctx.guild.get_role(role_nato_id)
+        role_russia = ctx.guild.get_role(role_russia_id)
 
         if role_1:
             await officer.remove_roles(role_1)
@@ -135,10 +151,18 @@ async def remove_officer(ctx, officer: discord.Member):
         if role_2:
             await officer.remove_roles(role_2)
 
-        # Check if the officer was added less than 14 days ago
+         # Знімання додаткових ролей в залежності від значення side
+        if officer_info[4].lower() == 'nato':
+            if role_nato:
+                await officer.remove_roles(role_nato, reason="NATO side removed.")
+        elif officer_info[4].lower() == 'russia':
+            if role_russia:
+                await officer.remove_roles(role_russia, reason="Russia side removed.")
+
+        # 14 дней удаление
         date_added = datetime.strptime(officer_info[5], '%Y-%m-%d %H:%M:%S')
         if datetime.now() - date_added < timedelta(days=14):
-            # Add the officer to the blacklist
+            # добавить в блеклист
             cursor_blacklist.execute('''
                 INSERT INTO blacklist (nickname, steamid, position, side, date_removed, removed_by)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -159,8 +183,8 @@ async def remove_officer(ctx, officer: discord.Member):
 
 @bot.command()
 @commands.has_role(administrator_role_id)
-async def list_blacklist(ctx):
-    # Retrieve blacklisted officers from the blacklist database
+async def blacklist(ctx):
+    # вывести блеклист
     cursor_blacklist.execute('SELECT * FROM blacklist')
     blacklisted_officers = cursor_blacklist.fetchall()
 
@@ -172,7 +196,7 @@ async def list_blacklist(ctx):
         )
         await ctx.send(embed=embed)
     else:
-        # Format and output information about blacklisted officers
+        # вывод информация
         embed = discord.Embed(
             title='Blacklisted Officers',
             color=discord.Color.red()
@@ -192,11 +216,10 @@ async def bot_help(ctx):
         description='List of available commands:',
         color=discord.Color.gold()
     )
-    embed.add_field(name='!add_officer <officer> <steamid> <position> <side>', value='Adds a new officer to the database and assigns roles.', inline=False)
-    embed.add_field(name='!list_officers', value='Shows a list of all officers in the database.', inline=False)
-    embed.add_field(name='!remove_officer <officer>', value='Removes an officer by their ID and removes roles.', inline=False)
-    embed.add_field(name='!list_blacklist', value='Shows a list of all blacklisted officers.', inline=False)
+    embed.add_field(name='!add <officer> <steamid> <пост> <nato/russia>', value='Добавляет нового офицера', inline=False)
+    embed.add_field(name='!officers', value='Показывает список офицеров.', inline=False)
+    embed.add_field(name='!remove <officer>', value='Удаляет офицера из базы данных и удаляет его роли', inline=False)
+    embed.add_field(name='!blacklist', value='Показывает ЧС Офицеров', inline=False)
     await ctx.send(embed=embed)
 
-
-bot.run('YOUR_TOKEN_BOT')
+bot.run('secret')
